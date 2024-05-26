@@ -2,6 +2,7 @@ import mysql.connector
 from neo4j import GraphDatabase
 import config
 
+
 # 连接 MySQL 数据库
 def fetch_data_from_mysql(query):
     mysql_conn = mysql.connector.connect(**config.mysql_config)
