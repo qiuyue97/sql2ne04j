@@ -131,6 +131,39 @@ def extractFromEciPartner(tx, rows):
                 MERGE (p)-[:has_stake {stock_percent: $stock_percent, should_capi: $should_capi}]->(c)
             """, p_key_no=p_key_no, stock_name=stock_name, key_no=key_no, stock_percent=stock_percent, should_capi=should_capi)
 
+
+def extractFromEciBranch(tx, rows):
+    for row in rows:
+        id, key_no, company_id, company_name, sub_key_no, sub_company_id, name = row
+
+        tx.run("""
+            MERGE (c:Company {key_no: $key_no})
+            ON CREATE SET c.key_no = $key_no, c.company_id = $company_id, c.name = $company_name
+            ON MATCH SET c.company_id = COALESCE(c.company_id, $company_id), c.name = COALESCE(c.name, $company_name)
+        """, key_no=key_no, company_id=company_id, company_name=company_name)
+
+        tx.run("""
+            MERGE (c:Company {key_no: $sub_key_no})
+            ON CREATE SET c.key_no = $sub_key_no, c.company_id = $sub_company_id, c.name = $name
+            ON MATCH SET c.company_id = COALESCE(c.company_id, $sub_company_id), c.name = COALESCE(c.name, $name)
+            WITH c
+            MATCH (c2:Company {key_no: $key_no})
+            MERGE (c2)-[:has_branch]->(c)
+        """, sub_key_no=sub_key_no, sub_company_id=sub_company_id, name=name, key_no=key_no)
+
+
+def extractFromBiddingBaseinfo(tx, rows):
+    for row in rows:
+        pageTime, winBidPrice, winTenderer, tenderee = row
+
+        tx.run("""
+            MERGE (c1:Company {name: $winTenderer})
+            WITH c1
+            MATCH (c2:Company {name: $tenderee})
+            MERGE (c1)-[:supplier {pageTime: $pageTime, winBidPrice: $winBidPrice}]->(c2)
+        """, winTenderer=winTenderer, tenderee=tenderee, pageTime=pageTime, winBidPrice=winBidPrice)
+
+
 # 定义字典
 tables = {
     "t_company_control_person": {
@@ -149,6 +182,14 @@ tables = {
         "query": "SELECT id, key_no, company_id, company_name, stock_name, stock_type, stock_percent, should_capi, p_key_no FROM t_eci_partner",
         "extract_function": extractFromEciPartner
     },
+    "t_eci_branch": {
+        "query": "SELECT id, key_no, company_id, company_name, sub_key_no, sub_company_id, name FROM t_eci_branch",
+        "extract_function": extractFromEciBranch
+    },
+    "t_bidding_baseinfo": {
+        "query": "SELECT pageTime, winBidPrice, winTenderer, tenderee FROM t_bidding_baseinfo",
+        "extract_function": extractFromBiddingBaseinfo
+    }
 }
 
 process_data_for_neo4j(tables)
