@@ -23,6 +23,7 @@ def process_data_for_neo4j(tables):
             extract_function = operations["extract_function"]
             rows = fetch_data_from_mysql(query)
             session.execute_write(extract_function, rows)
+        session.execute_write(createSuspectedRelatedRelationships)
     neo4j_driver.close()
 
 
@@ -163,6 +164,21 @@ def extractFromBiddingBaseinfo(tx, rows):
             MATCH (c2:Company {name: $tenderee})
             MERGE (c1)-[:supplier {pageTime: $pageTime, winBidPrice: $winBidPrice}]->(c2)
         """, winTenderer=winTenderer, tenderee=tenderee, pageTime=pageTime, winBidPrice=winBidPrice)
+
+
+def createSuspectedRelatedRelationships(tx):
+    tx.run("""
+        // 建立相同地址的关系
+        MATCH (c1:Company), (c2:Company)
+        WHERE c1.address IS NOT NULL AND c1.address = c2.address AND id(c1) < id(c2)
+        MERGE (c1)-[r:suspected_related {reason: 'same_address'}]->(c2)
+    """)
+    tx.run("""
+        // 建立相同电话号码的关系
+        MATCH (c1:Company), (c2:Company)
+        WHERE c1.phone_number IS NOT NULL AND c1.phone_number = c2.phone_number AND id(c1) < id(c2)
+        MERGE (c1)-[r:suspected_related {reason: 'same_phone_number'}]->(c2)
+    """)
 
 
 # 定义字典
