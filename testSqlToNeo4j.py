@@ -1,18 +1,56 @@
 import mysql.connector
+from sqlalchemy import create_engine
+import pandas as pd
 from neo4j import GraphDatabase
+import sys
 import config
 
 
-# 连接 MySQL 数据库
-def fetch_data_from_mysql(query):
-    mysql_conn = mysql.connector.connect(**config.mysql_config)
-    mysql_cursor = mysql_conn.cursor()
-    mysql_cursor.execute(query)
-    rows = mysql_cursor.fetchall()
-    mysql_cursor.close()
-    mysql_conn.close()
-    return rows
+# 自定义进度条
+def print_progress_bar(iteration, total, prefix='', suffix='', decimals=1, length=50, fill='█'):
+    percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
+    filled_length = int(length * iteration // total)
+    bar = fill * filled_length + '-' * (length - filled_length)
+    sys.stdout.write(f'\r{prefix} |{bar}| {percent}% {suffix}')
+    sys.stdout.flush()
+    if iteration == total:
+        sys.stdout.write('\n')
+        sys.stdout.flush()
 
+# 获取表的总行数
+def get_total_rows(table_name):
+    try:
+        mysql_conn = mysql.connector.connect(**config.mysql_config)
+        mysql_cursor = mysql_conn.cursor()
+        count_query = f"SELECT COUNT(*) FROM {table_name}"
+        mysql_cursor.execute(count_query)
+        total_rows = mysql_cursor.fetchone()[0]
+        mysql_cursor.close()
+        mysql_conn.close()
+        return total_rows
+    except mysql.connector.Error as e:
+        print(f"Error fetching total rows for table {table_name}: {e}")
+        return None
+
+# 连接 MySQL 数据库并逐段读取数据
+def fetch_data_from_mysql(query, table_name, chunksize=10000):
+    while True:
+        try:
+            engine = create_engine(
+                f"mysql+mysqlconnector://{config.mysql_config['user']}:{config.mysql_config['password']}@{config.mysql_config['host']}/{config.mysql_config['database']}?auth_plugin=mysql_native_password"
+            )
+
+            total_rows = get_total_rows(table_name)
+            if total_rows is None:
+                break
+
+            for chunk in pd.read_sql_query(query, engine, chunksize=chunksize):
+                yield chunk, total_rows
+
+            break
+        except Exception as e:
+            print(f"MySQL connection error: {e}, retrying...")
+            continue
 
 # 连接 Neo4j 数据库并执行
 def process_data_for_neo4j(tables):
@@ -21,24 +59,32 @@ def process_data_for_neo4j(tables):
         for table_name, operations in tables.items():
             query = operations["query"]
             extract_function = operations["extract_function"]
-            rows = fetch_data_from_mysql(query)
-            session.execute_write(extract_function, rows)
+
+            total_rows = get_total_rows(table_name)
+            if total_rows is None:
+                continue
+
+            processed_rows = 0
+            for chunk, _ in fetch_data_from_mysql(query, table_name):
+                for index, row in chunk.iterrows():
+                    session.execute_write(extract_function, row)
+                    processed_rows += 1
+                    print_progress_bar(processed_rows, total_rows, prefix=f'Processing {table_name}', suffix='Complete', length=50)
         session.execute_write(createSuspectedRelatedRelationships)
     neo4j_driver.close()
 
 
 # 定义创建节点和关系的函数
-def extractFromCompanyControlPerson(tx, rows):
-    for row in rows:
-        id, key_no, company_id, oper_key_no, oper_name, node_type, stock_percent = row
-
+def extractFromCompanyControlPerson(tx, row):
+    _, key_no, company_id, company_name, oper_key_no, oper_name, node_type, stock_percent = row
+    if oper_key_no != None and oper_name != "无":
         tx.run("""
             MERGE (c:Company {key_no: $key_no})
-            ON CREATE SET c.key_no = $key_no, c.company_id = $company_id
-            ON MATCH SET c.company_id = COALESCE(c.company_id, $company_id)
-        """, key_no=key_no, company_id=company_id)
+            ON CREATE SET c.key_no = $key_no, c.company_id = $company_id, c.name = $company_name
+            ON MATCH SET c.company_id = COALESCE(c.company_id, $company_id), c.name = COALESCE(c.company_name, $company_name)
+        """, key_no=key_no, company_id=company_id, company_name=company_name)
 
-        if node_type == 'company':
+        if node_type == 'ep':
             tx.run("""
                 MERGE (c1:Company {key_no: $oper_key_no})
                 ON CREATE SET c1.key_no = $oper_key_no, c1.name = $oper_name
@@ -58,10 +104,9 @@ def extractFromCompanyControlPerson(tx, rows):
             """, oper_key_no=oper_key_no, oper_name=oper_name, key_no=key_no, stock_percent=stock_percent)
 
 
-def extractFromEciCompany(tx, rows):
-    for row in rows:
-        key_no, company_id, company_name, oper_key_no, oper_name, province_code, province, address, phone_number = row
-
+def extractFromEciCompany(tx, row):
+    key_no, company_id, company_name, oper_key_no, oper_name, province_code, province, address, phone_number = row
+    if oper_key_no != None and oper_name != "无":
         tx.run("""
             MERGE (c:Company {key_no: $key_no})
             ON CREATE SET c.key_no = $key_no, c.company_id = $company_id, c.name = $company_name, c.address = $address, c.phone_number = $phone_number
@@ -85,10 +130,9 @@ def extractFromEciCompany(tx, rows):
         """, province_code=province_code, province=province, key_no=key_no)
 
 
-def extractFromEciEmployee(tx, rows):
-    for row in rows:
-        id, key_no, company_id, company_name, name, job, p_key_no = row
-
+def extractFromEciEmployee(tx, row):
+    id, key_no, company_id, company_name, name, job, p_key_no = row
+    if p_key_no != None and name != "无" and job != None:
         tx.run("""
             MERGE (c:Company {key_no: $key_no})
             ON CREATE SET c.key_no = $key_no, c.company_id = $company_id, c.name = $company_name
@@ -183,30 +227,30 @@ def createSuspectedRelatedRelationships(tx):
 
 # 定义字典
 tables = {
-    "t_company_control_person": {
-        "query": "SELECT id, key_no, company_id, oper_key_no, oper_name, node_type, stock_percent FROM t_company_control_person",
-        "extract_function": extractFromCompanyControlPerson
-    },
-    "t_eci_company": {
-        "query": "SELECT key_no, company_id, company_name, oper_key_no, oper_name, province_code, province, address, phone_number FROM t_eci_company",
-        "extract_function": extractFromEciCompany
-    },
-    "t_eci_employee": {
-        "query": "SELECT id, key_no, company_id, company_name, name, job, p_key_no FROM t_eci_employee",
+    # "t_company_control_person": {
+    #     "query": "SELECT id, key_no, company_id, company_name, oper_key_no, oper_name, node_type, stock_percent FROM t_company_control_person",
+    #     "extract_function": extractFromCompanyControlPerson
+    # },
+    # "t_eci_company": {
+    #     "query": "SELECT key_no, company_id, company_name, oper_key_no, oper_name, province_code, province, address, phone_number FROM t_eci_company",
+    #     "extract_function": extractFromEciCompany
+    # },
+    "zs_t_eci_employee": {
+        "query": "SELECT id, key_no, company_id, company_name, name, job, p_key_no FROM zs_t_eci_employee",
         "extract_function": extractFromEciEmployee
     },
-    "t_eci_partner":{
-        "query": "SELECT id, key_no, company_id, company_name, stock_name, stock_type, stock_percent, should_capi, p_key_no FROM t_eci_partner",
-        "extract_function": extractFromEciPartner
-    },
-    "t_eci_branch": {
-        "query": "SELECT id, key_no, company_id, company_name, sub_key_no, sub_company_id, name FROM t_eci_branch",
-        "extract_function": extractFromEciBranch
-    },
-    "t_bidding_baseinfo": {
-        "query": "SELECT pageTime, winBidPrice, winTenderer, tenderee FROM t_bidding_baseinfo",
-        "extract_function": extractFromBiddingBaseinfo
-    }
+    # "t_eci_partner":{
+    #     "query": "SELECT id, key_no, company_id, company_name, stock_name, stock_type, stock_percent, should_capi, p_key_no FROM t_eci_partner",
+    #     "extract_function": extractFromEciPartner
+    # },
+    # "t_eci_branch": {
+    #     "query": "SELECT id, key_no, company_id, company_name, sub_key_no, sub_company_id, name FROM t_eci_branch",
+    #     "extract_function": extractFromEciBranch
+    # },
+    # "t_bidding_baseinfo": {
+    #     "query": "SELECT pageTime, winBidPrice, winTenderer, tenderee FROM t_bidding_baseinfo",
+    #     "extract_function": extractFromBiddingBaseinfo
+    # }
 }
 
 process_data_for_neo4j(tables)
