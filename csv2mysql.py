@@ -45,7 +45,7 @@ for filename in os.listdir(folder_path):
             engine = create_engine_from_config(config)
 
             reader = pd.read_csv(file_path, encoding=detected_encoding, chunksize=chunk_size, iterator=True,
-                                 low_memory=False)
+                                 low_memory=False, encoding_errors='ignore')
             for chunk in tqdm(reader, desc=f"Inserting chunks into {table_name}", unit="chunk"):
                 try:
                     insert_chunk_to_db(chunk, table_name, engine)
