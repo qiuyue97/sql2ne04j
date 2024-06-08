@@ -7,11 +7,11 @@ import config
 
 
 # 自定义进度条
-def print_progress_bar(iteration, total, prefix='', suffix='', decimals=1, length=50, fill='█'):
+def print_progress_bar(iteration, total, prefix='', decimals=1, length=50, fill='█'):
     percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
     filled_length = int(length * iteration // total)
     bar = fill * filled_length + '-' * (length - filled_length)
-    sys.stdout.write(f'\r{prefix} |{bar}| {percent}% {suffix}')
+    sys.stdout.write(f'\r{prefix} |{bar}| {percent}% {iteration} / {total}')
     sys.stdout.flush()
     if iteration == total:
         sys.stdout.write('\n')
@@ -69,7 +69,7 @@ def process_data_for_neo4j(tables):
                 for index, row in chunk.iterrows():
                     session.execute_write(extract_function, row)
                     processed_rows += 1
-                    print_progress_bar(processed_rows, total_rows, prefix=f'Processing {table_name}', suffix='Complete', length=50)
+                    print_progress_bar(processed_rows, total_rows, prefix=f'Processing {table_name}', length=50)
         session.execute_write(createSuspectedRelatedRelationships)
     neo4j_driver.close()
 
@@ -239,22 +239,22 @@ def createSuspectedRelatedRelationships(tx):
 
 # 定义字典
 tables = {
-    "t_company_control_person": {
-        "query": "SELECT id, key_no, company_id, company_name, oper_key_no, oper_name, node_type, stock_percent FROM t_company_control_person",
-        "extract_function": extractFromCompanyControlPerson
-    },
-    "t_eci_company": {
-        "query": "SELECT key_no, company_id, company_name, oper_key_no, oper_name, province_code, province, address, phone_number FROM t_eci_company",
-        "extract_function": extractFromEciCompany
-    },
-    "zs_t_eci_employee": {
-        "query": "SELECT id, key_no, company_id, company_name, name, job, p_key_no FROM zs_t_eci_employee",
-        "extract_function": extractFromEciEmployee
-    },
-    "t_eci_partner":{
-        "query": "SELECT id, key_no, company_id, company_name, stock_name, stock_type, stock_percent, should_capi, p_key_no FROM t_eci_partner",
-        "extract_function": extractFromEciPartner
-    },
+    # "t_company_control_person": {
+    #     "query": "SELECT id, key_no, company_id, company_name, oper_key_no, oper_name, node_type, stock_percent FROM t_company_control_person",
+    #     "extract_function": extractFromCompanyControlPerson
+    # },
+    # "t_eci_company": {
+    #     "query": "SELECT key_no, company_id, company_name, oper_key_no, oper_name, province_code, province, address, phone_number FROM t_eci_company",
+    #     "extract_function": extractFromEciCompany
+    # },
+    # "zs_t_eci_employee": {
+    #     "query": "SELECT id, key_no, company_id, company_name, name, job, p_key_no FROM zs_t_eci_employee",
+    #     "extract_function": extractFromEciEmployee
+    # },
+    # "t_eci_partner":{
+    #     "query": "SELECT id, key_no, company_id, company_name, stock_name, stock_type, stock_percent, should_capi, p_key_no FROM t_eci_partner",
+    #     "extract_function": extractFromEciPartner
+    # },
     "t_eci_branch": {
         "query": "SELECT id, key_no, company_id, company_name, sub_key_no, sub_company_id, name FROM t_eci_branch",
         "extract_function": extractFromEciBranch
