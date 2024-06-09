@@ -226,6 +226,7 @@ def create_indexes(session):
     indexes = [
         "CREATE INDEX IF NOT EXISTS FOR (c:Company) ON (c.key_no)",
         "CREATE INDEX IF NOT EXISTS FOR (c:Company) ON (c.company_id)",
+        "CREATE INDEX IF NOT EXISTS FOR (c:Company) ON (c.name)",
         "CREATE INDEX IF NOT EXISTS FOR (p:Person) ON (p.key_no)"
     ]
     for index in indexes:
