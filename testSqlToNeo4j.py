@@ -94,14 +94,14 @@ def extractFromCompanyControlPerson(tx, rows):
     tx.run("""
         UNWIND $rows AS row
         FOREACH (ignoreMe IN CASE WHEN row.key_no IS NOT NULL THEN [1] ELSE [] END |
-            MERGE (c:Company {key_no: row.key_no})
-            ON CREATE SET c.key_no = row.key_no, c.company_id = row.company_id, c.name = row.company_name
-            ON MATCH SET c.company_id = COALESCE(c.company_id, row.company_id), c.name = COALESCE(c.name, row.company_name)
+            MERGE (c:Company {company_id: row.company_id})
+            ON CREATE SET c.company_id = row.company_id, c.key_no = row.key_no, c.name = row.company_name, c.create_from = 't_company_control_person'
+            ON MATCH SET c.key_no = COALESCE(c.key_no, row.key_no), c.name = COALESCE(c.name, row.company_name)
             FOREACH (ignoreMe2 IN CASE WHEN row.oper_key_no IS NOT NULL THEN [1] ELSE [] END |
                 FOREACH (ignoreMe3 IN CASE WHEN row.node_type = 'ep' THEN [1] ELSE [] END |
-                    MERGE (c1:Company {key_no: row.oper_key_no})
-                    ON CREATE SET c1.key_no = row.oper_key_no, c1.name = row.oper_name
-                    ON MATCH SET c1.name = COALESCE(c1.name, row.oper_name)
+                    MERGE (c1:Company {name: row.oper_name})
+                    ON CREATE SET c1.name = row.oper_name, c1.key_no = row.oper_key_no, c1.create_from = 't_company_control_person'
+                    ON MATCH SET c1.key_no = COALESCE(c1.key_no, row.oper_key_no)
                     MERGE (c1)-[:actual_control {stock_percent: row.stock_percent}]->(c)
                 )
                 FOREACH (ignoreMe3 IN CASE WHEN row.node_type = 'person' THEN [1] ELSE [] END |
@@ -119,9 +119,9 @@ def extractFromEciCompany(tx, rows):
     tx.run("""
         UNWIND $rows AS row
         FOREACH (ignoreMe IN CASE WHEN row.key_no IS NOT NULL THEN [1] ELSE [] END |
-            MERGE (c:Company {key_no: row.key_no})
-            ON CREATE SET c.key_no = row.key_no, c.company_id = row.company_id, c.name = row.company_name, c.address = row.address, c.phone_number = row.phone_number
-            ON MATCH SET c.company_id = COALESCE(c.company_id, row.company_id), c.name = COALESCE(c.name, row.company_name), c.address = COALESCE(c.address, row.address), c.phone_number = COALESCE(c.phone_number, row.phone_number)
+            MERGE (c:Company {company_id: row.company_id})
+            ON CREATE SET c.company_id = row.company_id, c.key_no = row.key_no, c.name = row.company_name, c.address = row.address, c.phone_number = row.phone_number, c.create_from = 't_eci_company'
+            ON MATCH SET c.key_no = COALESCE(c.key_no, row.key_no), c.name = COALESCE(c.name, row.company_name), c.address = COALESCE(c.address, row.address), c.phone_number = COALESCE(c.phone_number, row.phone_number)
             FOREACH (ignoreMe2 IN CASE WHEN row.oper_key_no IS NOT NULL AND row.oper_name <> "无" THEN [1] ELSE [] END |
                 MERGE (p:Person {key_no: row.oper_key_no})
                 ON CREATE SET p.key_no = row.oper_key_no, p.name = row.oper_name
@@ -142,9 +142,9 @@ def extractFromEciEmployee(tx, rows):
     tx.run("""
         UNWIND $rows AS row
         FOREACH (ignoreMe IN CASE WHEN row.key_no IS NOT NULL THEN [1] ELSE [] END |
-            MERGE (c:Company {key_no: row.key_no})
-            ON CREATE SET c.key_no = row.key_no, c.company_id = row.company_id, c.name = row.company_name
-            ON MATCH SET c.company_id = COALESCE(c.company_id, row.company_id), c.name = COALESCE(c.name, row.company_name)
+            MERGE (c:Company {company_id: row.company_id})
+            ON CREATE SET c.company_id = row.company_id, c.key_no = row.key_no, c.name = row.company_name, c.create_from = 'zs_t_eci_employee'
+            ON MATCH SET c.key_no = COALESCE(c.key_no, row.key_no), c.name = COALESCE(c.name, row.company_name)
             FOREACH (ignoreMe2 IN CASE WHEN row.p_key_no IS NOT NULL AND row.name <> "无" AND row.job IS NOT NULL THEN [1] ELSE [] END |
                 MERGE (p:Person {key_no: row.p_key_no})
                 ON CREATE SET p.key_no = row.p_key_no, p.name = row.name
@@ -162,14 +162,14 @@ def extractFromEciPartner(tx, rows):
             CASE WHEN row.stock_percent IS NULL THEN 'unknown' ELSE row.stock_percent END AS stock_percent,
             CASE WHEN row.should_capi IS NULL THEN 'unknown' ELSE row.should_capi END AS should_capi
         FOREACH (ignoreMe IN CASE WHEN row.key_no IS NOT NULL THEN [1] ELSE [] END |
-            MERGE (c:Company {key_no: row.key_no})
-            ON CREATE SET c.key_no = row.key_no, c.company_id = row.company_id, c.name = row.company_name
-            ON MATCH SET c.company_id = COALESCE(c.company_id, row.company_id), c.name = COALESCE(c.name, row.company_name)
+            MERGE (c:Company {company_id: row.company_id})
+            ON CREATE SET c.company_id = row.company_id, c.key_no = row.key_no, c.name = row.company_name, c.create_from = 't_eci_partner'
+            ON MATCH SET c.key_no = COALESCE(c.key_no, row.key_no), c.name = COALESCE(c.name, row.company_name)
             FOREACH (ignoreMe2 IN CASE WHEN row.p_key_no IS NOT NULL THEN [1] ELSE [] END |
                 FOREACH (ignoreMe3 IN CASE WHEN row.stock_type = '企业股东' THEN [1] ELSE [] END |
-                    MERGE (c1:Company {key_no: row.p_key_no})
-                    ON CREATE SET c1.key_no = row.p_key_no, c1.name = row.stock_name
-                    ON MATCH SET c1.name = COALESCE(c1.name, row.stock_name)
+                    MERGE (c1:Company {name: row.stock_name})
+                    ON CREATE SET c1.name = row.stock_name, c1.key_no = row.p_key_no, c1.create_from = 't_eci_partner'
+                    ON MATCH SET c1.key_no = COALESCE(c1.key_no, row.p_key_no)
                     MERGE (c1)-[:has_stake {stock_percent: stock_percent, should_capi: should_capi}]->(c)
                 )
                 FOREACH (ignoreMe3 IN CASE WHEN row.stock_type = '自然人股东' THEN [1] ELSE [] END |
@@ -187,13 +187,13 @@ def extractFromEciBranch(tx, rows):
     tx.run("""
         UNWIND $rows AS row
         FOREACH (ignoreMe IN CASE WHEN row.key_no IS NOT NULL THEN [1] ELSE [] END |
-            MERGE (c:Company {key_no: row.key_no})
-            ON CREATE SET c.key_no = row.key_no, c.company_id = row.company_id, c.name = row.company_name
-            ON MATCH SET c.company_id = COALESCE(c.company_id, row.company_id), c.name = COALESCE(c.name, row.company_name)
+            MERGE (c:Company {name: row.company_name})
+            ON CREATE SET c.name = row.company_name, c.company_id = row.company_id, c.key_no = row.key_no, c.create_from = 't_eci_branch'
+            ON MATCH SET c.key_no = COALESCE(c.key_no, row.key_no), c.company_id = COALESCE(c.company_id, row.company_id)
             FOREACH (ignoreMe2 IN CASE WHEN row.sub_key_no IS NOT NULL THEN [1] ELSE [] END |
-                MERGE (c2:Company {key_no: row.sub_key_no})
-                ON CREATE SET c2.key_no = row.sub_key_no, c2.company_id = row.sub_company_id, c2.name = row.name
-                ON MATCH SET c2.company_id = COALESCE(c2.company_id, row.sub_company_id), c2.name = COALESCE(c2.name, row.name)
+                MERGE (c2:Company {name: row.name})
+                ON CREATE SET c2.name = row.name, c2.company_id = row.sub_company_id, c2.key_no = row.sub_key_no, c2.create_from = 't_eci_branch'
+                ON MATCH SET c2.key_no = COALESCE(c2.key_no, row.sub_key_no), c2.company_id = COALESCE(c2.company_id, row.sub_company_id)
                 MERGE (c)-[:has_branch]->(c2)
             )
         )
@@ -206,13 +206,13 @@ def extractFromBiddingBaseinfo(tx, rows):
         WITH row,
             CASE WHEN row.winBidPrice IS NULL OR row.winBidPrice = 'NaN' THEN 'unknown' ELSE row.winBidPrice END AS winBidPrice
         FOREACH (ignoreMe IN CASE WHEN row.wintendererCompanyId IS NOT NULL AND row.winTenderer IS NOT NULL AND row.tendereeCompanyId IS NOT NULL AND row.tenderee IS NOT NULL THEN [1] ELSE [] END |
-            MERGE (c1:Company {company_id: row.wintendererCompanyId})
-            ON CREATE SET c1.name = row.winTenderer
-            ON MATCH SET c1.name = COALESCE(c1.name, row.winTenderer)
+            MERGE (c1:Company {name: row.winTenderer})
+            ON CREATE SET c1.name = row.winTenderer, c1.company_id = row.wintendererCompanyId, c1.create_from = 't_company_bidding_attr_info'
+            ON MATCH SET c1.company_id = COALESCE(c1.company_id, row.wintendererCompanyId)
             FOREACH (ignoreMe2 IN CASE WHEN row.tendereeCompanyId IS NOT NULL THEN [1] ELSE [] END |
-                MERGE (c2:Company {company_id: row.tendereeCompanyId})
-                ON CREATE SET c2.name = row.tenderee
-                ON MATCH SET c2.name = COALESCE(c2.name, row.tenderee)
+                MERGE (c2:Company {name: row.tenderee})
+                ON CREATE SET c2.name = row.tenderee, c2.company_id = row.tendereeCompanyId, c2.create_from = 't_company_bidding_attr_info'
+                ON MATCH SET c2.company_id = COALESCE(c2.company_id, row.tendereeCompanyId)
                 MERGE (c1)-[r:supplier]->(c2)
                 ON CREATE SET r.pageTime = row.pageTime, r.winBidPrice = winBidPrice
                 ON MATCH SET r.pageTime = CASE WHEN r.pageTime < row.pageTime THEN row.pageTime ELSE r.pageTime END,
