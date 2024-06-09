@@ -53,7 +53,7 @@ def fetch_data_from_mysql(query, table_name, chunksize=10000):
             continue
 
 # 连接 Neo4j 数据库并执行
-def process_data_for_neo4j(tables):
+def process_data_for_neo4j(tables, batch_size=1000):
     neo4j_driver = GraphDatabase.driver(config.neo4j_config['uri'], auth=(config.neo4j_config['user'], config.neo4j_config['password']))
     with neo4j_driver.session() as session:
         for table_name, operations in tables.items():
@@ -65,161 +65,156 @@ def process_data_for_neo4j(tables):
                 continue
 
             processed_rows = 0
+            batch = []
             for chunk, _ in fetch_data_from_mysql(query, table_name):
                 for index, row in chunk.iterrows():
-                    session.execute_write(extract_function, row)
-                    processed_rows += 1
+                    batch.append(row.to_dict())
+                    if len(batch) >= batch_size:
+                        session.execute_write(extract_function, batch)
+                        processed_rows += len(batch)
+                        batch = []
+                        print_progress_bar(processed_rows, total_rows, prefix=f'Processing {table_name}', length=50)
+                if batch:
+                    session.execute_write(extract_function, batch)
+                    processed_rows += len(batch)
+                    batch = []
                     print_progress_bar(processed_rows, total_rows, prefix=f'Processing {table_name}', length=50)
         session.execute_write(createSuspectedRelatedRelationships)
     neo4j_driver.close()
 
 
 # 定义创建节点和关系的函数
-def extractFromCompanyControlPerson(tx, row):
-    _, key_no, company_id, company_name, oper_key_no, oper_name, node_type, stock_percent = row
-    if oper_key_no is not None and oper_name != "无":
-        tx.run("""
-            MERGE (c:Company {key_no: $key_no})
-            ON CREATE SET c.key_no = $key_no, c.company_id = $company_id, c.name = $company_name
-            ON MATCH SET c.company_id = COALESCE(c.company_id, $company_id), c.name = COALESCE(c.company_name, $company_name)
-        """, key_no=key_no, company_id=company_id, company_name=company_name)
-
-        if node_type == 'ep':
-            tx.run("""
-                MERGE (c1:Company {key_no: $oper_key_no})
-                ON CREATE SET c1.key_no = $oper_key_no, c1.name = $oper_name
-                ON MATCH SET c1.name = COALESCE(c1.name, $oper_name)
-                WITH c1
-                MATCH (c2:Company {key_no: $key_no})
-                MERGE (c1)-[:actual_control {stock_percent: $stock_percent}]->(c2)
-            """, oper_key_no=oper_key_no, oper_name=oper_name, key_no=key_no, stock_percent=stock_percent)
-        elif node_type == 'person':
-            tx.run("""
-                MERGE (p:Person {key_no: $oper_key_no})
-                ON CREATE SET p.key_no = $oper_key_no, p.name = $oper_name
-                ON MATCH SET p.name = COALESCE(p.name, $oper_name)
-                WITH p
-                MATCH (c:Company {key_no: $key_no})
-                MERGE (p)-[:actual_control {stock_percent: $stock_percent}]->(c)
-            """, oper_key_no=oper_key_no, oper_name=oper_name, key_no=key_no, stock_percent=stock_percent)
-
-
-def extractFromEciCompany(tx, row):
-    key_no, company_id, company_name, oper_key_no, oper_name, province_code, province, address, phone_number = row
-    if oper_key_no is not None and oper_name != "无":
-        tx.run("""
-            MERGE (c:Company {key_no: $key_no})
-            ON CREATE SET c.key_no = $key_no, c.company_id = $company_id, c.name = $company_name, c.address = $address, c.phone_number = $phone_number
-            ON MATCH SET c.company_id = COALESCE(c.company_id, $company_id), c.name = COALESCE(c.name, $company_name), c.address = COALESCE(c.address, $address), c.phone_number = COALESCE(c.phone_number, $phone_number)
-        """, key_no=key_no, company_id=company_id, company_name=company_name, address=address, phone_number=phone_number)
-        tx.run("""
-            MERGE (p:Person {key_no: $oper_key_no})
-            ON CREATE SET p.key_no = $oper_key_no, p.name = $oper_name
-            ON MATCH SET p.name = COALESCE(p.name, $oper_name)
-            WITH p
-            MATCH (c:Company {key_no: $key_no})
-            MERGE (c)-[:legal_rep]->(p)
-        """, oper_key_no=oper_key_no, oper_name=oper_name, key_no=key_no)
-        tx.run("""
-            MERGE (p:Province {code: $province_code})
-            ON CREATE SET p.code = $province_code, p.name = $province
-            ON MATCH SET p.name = COALESCE(p.name, $province)
-            WITH p
-            MATCH (c:Company {key_no: $key_no})
-            MERGE (c)-[:located_at]->(p)
-        """, province_code=province_code, province=province, key_no=key_no)
-
-
-def extractFromEciEmployee(tx, row):
-    _, key_no, company_id, company_name, name, job, p_key_no = row
-    if p_key_no is not None and name != "无" and job is not None:
-        tx.run("""
-            MERGE (c:Company {key_no: $key_no})
-            ON CREATE SET c.key_no = $key_no, c.company_id = $company_id, c.name = $company_name
-            ON MATCH SET c.company_id = COALESCE(c.company_id, $company_id), c.name = COALESCE(c.name, $company_name)
-        """, key_no=key_no, company_id=company_id, company_name=company_name)
-        tx.run("""
-            MERGE (p:Person {key_no: $p_key_no})
-            ON CREATE SET p.key_no = $p_key_no, p.name = $name
-            ON MATCH SET p.name = COALESCE(p.name, $name)
-            WITH p
-            MATCH (c:Company {key_no: $key_no})
-            MERGE (c)-[:employee {job: $job}]->(p)
-        """, p_key_no=p_key_no, name=name, key_no=key_no, job=job)
-
-
-def extractFromEciPartner(tx, row):
-    _, key_no, company_id, company_name, stock_name, stock_type, stock_percent, should_capi, p_key_no = row
-
-    if stock_percent is None:
-        stock_percent = 'unknown'
-    if should_capi is None:
-        should_capi = 'unknown'
+def extractFromCompanyControlPerson(tx, rows):
     tx.run("""
-        MERGE (c:Company {key_no: $key_no})
-        ON CREATE SET c.key_no = $key_no, c.company_id = $company_id, c.name = $company_name
-        ON MATCH SET c.company_id = COALESCE(c.company_id, $company_id), c.name = COALESCE(c.name, $company_name)
-    """, key_no=key_no, company_id=company_id, company_name=company_name)
-
-    if stock_type == '企业股东':
-        tx.run("""
-            MERGE (c1:Company {key_no: $p_key_no})
-            ON CREATE SET c1.key_no = $p_key_no, c1.name = $stock_name
-            ON MATCH SET c1.name = COALESCE(c1.name, $stock_name)
-            WITH c1
-            MATCH (c2:Company {key_no: $key_no})
-            MERGE (c1)-[:has_stake {stock_percent: $stock_percent, should_capi: $should_capi}]->(c2)
-        """, p_key_no=p_key_no, stock_name=stock_name, key_no=key_no, stock_percent=stock_percent, should_capi=should_capi)
-    elif stock_type == '自然人股东':
-        tx.run("""
-            MERGE (p:Person {key_no: $p_key_no})
-            ON CREATE SET p.key_no = $p_key_no, p.name = $stock_name
-            ON MATCH SET p.name = COALESCE(p.name, $stock_name)
-            WITH p
-            MATCH (c:Company {key_no: $key_no})
-            MERGE (p)-[:has_stake {stock_percent: $stock_percent, should_capi: $should_capi}]->(c)
-        """, p_key_no=p_key_no, stock_name=stock_name, key_no=key_no, stock_percent=stock_percent, should_capi=should_capi)
+        UNWIND $rows AS row
+        FOREACH (ignoreMe IN CASE WHEN row.key_no IS NOT NULL THEN [1] ELSE [] END |
+            MERGE (c:Company {key_no: row.key_no})
+            ON CREATE SET c.key_no = row.key_no, c.company_id = row.company_id, c.name = row.company_name
+            ON MATCH SET c.company_id = COALESCE(c.company_id, row.company_id), c.name = COALESCE(c.name, row.company_name)
+            FOREACH (ignoreMe2 IN CASE WHEN row.oper_key_no IS NOT NULL THEN [1] ELSE [] END |
+                FOREACH (ignoreMe3 IN CASE WHEN row.node_type = 'ep' THEN [1] ELSE [] END |
+                    MERGE (c1:Company {key_no: row.oper_key_no})
+                    ON CREATE SET c1.key_no = row.oper_key_no, c1.name = row.oper_name
+                    ON MATCH SET c1.name = COALESCE(c1.name, row.oper_name)
+                    MERGE (c1)-[:actual_control {stock_percent: row.stock_percent}]->(c)
+                )
+                FOREACH (ignoreMe3 IN CASE WHEN row.node_type = 'person' THEN [1] ELSE [] END |
+                    MERGE (p:Person {key_no: row.oper_key_no})
+                    ON CREATE SET p.key_no = row.oper_key_no, p.name = row.oper_name
+                    ON MATCH SET p.name = COALESCE(p.name, row.oper_name)
+                    MERGE (p)-[:actual_control {stock_percent: row.stock_percent}]->(c)
+                )
+            )
+        )
+    """, rows=rows)
 
 
-def extractFromEciBranch(tx, row):
-    _, key_no, company_id, company_name, sub_key_no, sub_company_id, name = row
-
+def extractFromEciCompany(tx, rows):
     tx.run("""
-        MERGE (c:Company {key_no: $key_no})
-        ON CREATE SET c.key_no = $key_no, c.company_id = $company_id, c.name = $company_name
-        ON MATCH SET c.company_id = COALESCE(c.company_id, $company_id), c.name = COALESCE(c.name, $company_name)
-    """, key_no=key_no, company_id=company_id, company_name=company_name)
+        UNWIND $rows AS row
+        FOREACH (ignoreMe IN CASE WHEN row.key_no IS NOT NULL THEN [1] ELSE [] END |
+            MERGE (c:Company {key_no: row.key_no})
+            ON CREATE SET c.key_no = row.key_no, c.company_id = row.company_id, c.name = row.company_name, c.address = row.address, c.phone_number = row.phone_number
+            ON MATCH SET c.company_id = COALESCE(c.company_id, row.company_id), c.name = COALESCE(c.name, row.company_name), c.address = COALESCE(c.address, row.address), c.phone_number = COALESCE(c.phone_number, row.phone_number)
+            FOREACH (ignoreMe2 IN CASE WHEN row.oper_key_no IS NOT NULL AND row.oper_name <> "无" THEN [1] ELSE [] END |
+                MERGE (p:Person {key_no: row.oper_key_no})
+                ON CREATE SET p.key_no = row.oper_key_no, p.name = row.oper_name
+                ON MATCH SET p.name = COALESCE(p.name, row.oper_name)
+                MERGE (c)-[:legal_rep]->(p)
+            )
+            FOREACH (ignoreMe3 IN CASE WHEN row.province_code IS NOT NULL THEN [1] ELSE [] END |
+                MERGE (pr:Province {code: row.province_code})
+                ON CREATE SET pr.code = row.province_code, pr.name = row.province
+                ON MATCH SET pr.name = COALESCE(pr.name, row.province)
+                MERGE (c)-[:located_at]->(pr)
+            )
+        )
+    """, rows=rows)
 
+
+def extractFromEciEmployee(tx, rows):
     tx.run("""
-        MERGE (c:Company {key_no: $sub_key_no})
-        ON CREATE SET c.key_no = $sub_key_no, c.company_id = $sub_company_id, c.name = $name
-        ON MATCH SET c.company_id = COALESCE(c.company_id, $sub_company_id), c.name = COALESCE(c.name, $name)
-        WITH c
-        MATCH (c2:Company {key_no: $key_no})
-        MERGE (c2)-[:has_branch]->(c)
-    """, sub_key_no=sub_key_no, sub_company_id=sub_company_id, name=name, key_no=key_no)
+        UNWIND $rows AS row
+        FOREACH (ignoreMe IN CASE WHEN row.key_no IS NOT NULL THEN [1] ELSE [] END |
+            MERGE (c:Company {key_no: row.key_no})
+            ON CREATE SET c.key_no = row.key_no, c.company_id = row.company_id, c.name = row.company_name
+            ON MATCH SET c.company_id = COALESCE(c.company_id, row.company_id), c.name = COALESCE(c.name, row.company_name)
+            FOREACH (ignoreMe2 IN CASE WHEN row.p_key_no IS NOT NULL AND row.name <> "无" AND row.job IS NOT NULL THEN [1] ELSE [] END |
+                MERGE (p:Person {key_no: row.p_key_no})
+                ON CREATE SET p.key_no = row.p_key_no, p.name = row.name
+                ON MATCH SET p.name = COALESCE(p.name, row.name)
+                MERGE (c)-[:employee {job: row.job}]->(p)
+            )
+        )
+    """, rows=rows)
 
 
-def extractFromBiddingBaseinfo(tx, row):
-    pageTime, winBidPrice, winTenderer, wintendererCompanyId, tenderee, tendereeCompanyId = row
+def extractFromEciPartner(tx, rows):
+    tx.run("""
+        UNWIND $rows AS row
+        WITH row,
+            CASE WHEN row.stock_percent IS NULL THEN 'unknown' ELSE row.stock_percent END AS stock_percent,
+            CASE WHEN row.should_capi IS NULL THEN 'unknown' ELSE row.should_capi END AS should_capi
+        FOREACH (ignoreMe IN CASE WHEN row.key_no IS NOT NULL THEN [1] ELSE [] END |
+            MERGE (c:Company {key_no: row.key_no})
+            ON CREATE SET c.key_no = row.key_no, c.company_id = row.company_id, c.name = row.company_name
+            ON MATCH SET c.company_id = COALESCE(c.company_id, row.company_id), c.name = COALESCE(c.name, row.company_name)
+            FOREACH (ignoreMe2 IN CASE WHEN row.p_key_no IS NOT NULL THEN [1] ELSE [] END |
+                FOREACH (ignoreMe3 IN CASE WHEN row.stock_type = '企业股东' THEN [1] ELSE [] END |
+                    MERGE (c1:Company {key_no: row.p_key_no})
+                    ON CREATE SET c1.key_no = row.p_key_no, c1.name = row.stock_name
+                    ON MATCH SET c1.name = COALESCE(c1.name, row.stock_name)
+                    MERGE (c1)-[:has_stake {stock_percent: stock_percent, should_capi: should_capi}]->(c)
+                )
+                FOREACH (ignoreMe3 IN CASE WHEN row.stock_type = '自然人股东' THEN [1] ELSE [] END |
+                    MERGE (p:Person {key_no: row.p_key_no})
+                    ON CREATE SET p.key_no = row.p_key_no, p.name = row.stock_name
+                    ON MATCH SET p.name = COALESCE(p.name, row.stock_name)
+                    MERGE (p)-[:has_stake {stock_percent: stock_percent, should_capi: should_capi}]->(c)
+                )
+            )
+        )
+    """, rows=rows)
 
-    if wintendererCompanyId is not None and winTenderer is not None and tendereeCompanyId is not None and tenderee is not None:
-        if winBidPrice is None or pd.isna(winBidPrice):
-            winBidPrice = 'unknown'
-        tx.run("""
-            MERGE (c1:Company {company_id: $wintendererCompanyId})
-            ON CREATE SET c1.name = $winTenderer
-            ON MATCH SET c1.name = COALESCE(c1.name, $winTenderer)
-            WITH c1
-            MERGE (c2:Company {company_id: $tendereeCompanyId})
-            ON CREATE SET c2.name = $tenderee
-            ON MATCH SET c2.name = COALESCE(c2.name, $tenderee)
-            WITH c1, c2
-            MERGE (c1)-[r:supplier]->(c2)
-            ON CREATE SET r.pageTime = $pageTime, r.winBidPrice = $winBidPrice
-            ON MATCH SET r.pageTime = CASE WHEN r.pageTime < $pageTime THEN $pageTime ELSE r.pageTime END,
-                            r.winBidPrice = CASE WHEN r.pageTime < $pageTime THEN $winBidPrice ELSE r.winBidPrice END
-        """, winTenderer=winTenderer, wintendererCompanyId=wintendererCompanyId, tenderee=tenderee, tendereeCompanyId=tendereeCompanyId, pageTime=pageTime, winBidPrice=winBidPrice)
+
+def extractFromEciBranch(tx, rows):
+    tx.run("""
+        UNWIND $rows AS row
+        FOREACH (ignoreMe IN CASE WHEN row.key_no IS NOT NULL THEN [1] ELSE [] END |
+            MERGE (c:Company {key_no: row.key_no})
+            ON CREATE SET c.key_no = row.key_no, c.company_id = row.company_id, c.name = row.company_name
+            ON MATCH SET c.company_id = COALESCE(c.company_id, row.company_id), c.name = COALESCE(c.name, row.company_name)
+            FOREACH (ignoreMe2 IN CASE WHEN row.sub_key_no IS NOT NULL THEN [1] ELSE [] END |
+                MERGE (c2:Company {key_no: row.sub_key_no})
+                ON CREATE SET c2.key_no = row.sub_key_no, c2.company_id = row.sub_company_id, c2.name = row.name
+                ON MATCH SET c2.company_id = COALESCE(c2.company_id, row.sub_company_id), c2.name = COALESCE(c2.name, row.name)
+                MERGE (c)-[:has_branch]->(c2)
+            )
+        )
+    """, rows=rows)
+
+
+def extractFromBiddingBaseinfo(tx, rows):
+    tx.run("""
+        UNWIND $rows AS row
+        WITH row,
+            CASE WHEN row.winBidPrice IS NULL OR row.winBidPrice = 'NaN' THEN 'unknown' ELSE row.winBidPrice END AS winBidPrice
+        FOREACH (ignoreMe IN CASE WHEN row.wintendererCompanyId IS NOT NULL AND row.winTenderer IS NOT NULL AND row.tendereeCompanyId IS NOT NULL AND row.tenderee IS NOT NULL THEN [1] ELSE [] END |
+            MERGE (c1:Company {company_id: row.wintendererCompanyId})
+            ON CREATE SET c1.name = row.winTenderer
+            ON MATCH SET c1.name = COALESCE(c1.name, row.winTenderer)
+            FOREACH (ignoreMe2 IN CASE WHEN row.tendereeCompanyId IS NOT NULL THEN [1] ELSE [] END |
+                MERGE (c2:Company {company_id: row.tendereeCompanyId})
+                ON CREATE SET c2.name = row.tenderee
+                ON MATCH SET c2.name = COALESCE(c2.name, row.tenderee)
+                MERGE (c1)-[r:supplier]->(c2)
+                ON CREATE SET r.pageTime = row.pageTime, r.winBidPrice = winBidPrice
+                ON MATCH SET r.pageTime = CASE WHEN r.pageTime < row.pageTime THEN row.pageTime ELSE r.pageTime END,
+                              r.winBidPrice = CASE WHEN r.pageTime < row.pageTime THEN winBidPrice ELSE r.winBidPrice END
+            )
+        )
+    """, rows=rows)
+
 
 
 def createSuspectedRelatedRelationships(tx):
@@ -239,22 +234,22 @@ def createSuspectedRelatedRelationships(tx):
 
 # 定义字典
 tables = {
-    # "t_company_control_person": {
-    #     "query": "SELECT id, key_no, company_id, company_name, oper_key_no, oper_name, node_type, stock_percent FROM t_company_control_person",
-    #     "extract_function": extractFromCompanyControlPerson
-    # },
-    # "t_eci_company": {
-    #     "query": "SELECT key_no, company_id, company_name, oper_key_no, oper_name, province_code, province, address, phone_number FROM t_eci_company",
-    #     "extract_function": extractFromEciCompany
-    # },
-    # "zs_t_eci_employee": {
-    #     "query": "SELECT id, key_no, company_id, company_name, name, job, p_key_no FROM zs_t_eci_employee",
-    #     "extract_function": extractFromEciEmployee
-    # },
-    # "t_eci_partner":{
-    #     "query": "SELECT id, key_no, company_id, company_name, stock_name, stock_type, stock_percent, should_capi, p_key_no FROM t_eci_partner",
-    #     "extract_function": extractFromEciPartner
-    # },
+    "t_company_control_person": {
+        "query": "SELECT id, key_no, company_id, company_name, oper_key_no, oper_name, node_type, stock_percent FROM t_company_control_person",
+        "extract_function": extractFromCompanyControlPerson
+    },
+    "t_eci_company": {
+        "query": "SELECT key_no, company_id, company_name, oper_key_no, oper_name, province_code, province, address, phone_number FROM t_eci_company",
+        "extract_function": extractFromEciCompany
+    },
+    "zs_t_eci_employee": {
+        "query": "SELECT id, key_no, company_id, company_name, name, job, p_key_no FROM zs_t_eci_employee",
+        "extract_function": extractFromEciEmployee
+    },
+    "t_eci_partner": {
+        "query": "SELECT id, key_no, company_id, company_name, stock_name, stock_type, stock_percent, should_capi, p_key_no FROM t_eci_partner",
+        "extract_function": extractFromEciPartner
+    },
     "t_eci_branch": {
         "query": "SELECT id, key_no, company_id, company_name, sub_key_no, sub_company_id, name FROM t_eci_branch",
         "extract_function": extractFromEciBranch
