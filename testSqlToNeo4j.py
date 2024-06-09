@@ -32,53 +32,59 @@ def get_total_rows(table_name):
         print(f"Error fetching total rows for table {table_name}: {e}")
         return None
 
+
 # 连接 MySQL 数据库并逐段读取数据
-def fetch_data_from_mysql(query, table_name, chunksize=10000):
-    while True:
-        try:
-            engine = create_engine(
-                f"mysql+mysqlconnector://{config.mysql_config['user']}:{config.mysql_config['password']}@{config.mysql_config['host']}/{config.mysql_config['database']}?auth_plugin=mysql_native_password"
-            )
-
-            total_rows = get_total_rows(table_name)
-            if total_rows is None:
+def fetch_data_from_mysql(columns, table_name, batch_size=1000, fetch_size=0):
+    offset = 0
+    total_rows_fetched = 0
+    try:
+        mysql_conn = mysql.connector.connect(**config.mysql_config)
+        mysql_cursor = mysql_conn.cursor()
+        total_rows = get_total_rows(table_name)
+        if total_rows is None:
+            return
+        while True:
+            limit = batch_size
+            if fetch_size > 0:
+                remaining_rows = fetch_size - total_rows_fetched
+                if remaining_rows <= 0:
+                    break
+                limit = min(batch_size, remaining_rows)
+            query = f"SELECT {', '.join(columns)} FROM {table_name} LIMIT {limit} OFFSET {offset}"
+            mysql_cursor.execute(query)
+            rows = mysql_cursor.fetchall()
+            if not rows:
                 break
+            total_rows_fetched += len(rows)
+            offset += limit
+            yield rows, total_rows
+        mysql_cursor.close()
+        mysql_conn.close()
+    except Exception as e:
+        print(f"MySQL connection error: {e}")
+        if mysql_cursor:
+            mysql_cursor.close()
+        if mysql_conn:
+            mysql_conn.close()
 
-            for chunk in pd.read_sql_query(query, engine, chunksize=chunksize):
-                yield chunk, total_rows
-
-            break
-        except Exception as e:
-            print(f"MySQL connection error: {e}, retrying...")
-            continue
 
 # 连接 Neo4j 数据库并执行
-def process_data_for_neo4j(tables, batch_size=1000):
+def process_data_for_neo4j(tables, fetch_size=0):
     neo4j_driver = GraphDatabase.driver(config.neo4j_config['uri'], auth=(config.neo4j_config['user'], config.neo4j_config['password']))
     with neo4j_driver.session() as session:
+        create_indexes(session)
         for table_name, operations in tables.items():
-            query = operations["query"]
+            columns = operations["columns"]
             extract_function = operations["extract_function"]
-
             total_rows = get_total_rows(table_name)
             if total_rows is None:
                 continue
-
             processed_rows = 0
-            batch = []
-            for chunk, _ in fetch_data_from_mysql(query, table_name):
-                for index, row in chunk.iterrows():
-                    batch.append(row.to_dict())
-                    if len(batch) >= batch_size:
-                        session.execute_write(extract_function, batch)
-                        processed_rows += len(batch)
-                        batch = []
-                        print_progress_bar(processed_rows, total_rows, prefix=f'Processing {table_name}', length=50)
-                if batch:
-                    session.execute_write(extract_function, batch)
-                    processed_rows += len(batch)
-                    batch = []
-                    print_progress_bar(processed_rows, total_rows, prefix=f'Processing {table_name}', length=50)
+            for chunk, _ in fetch_data_from_mysql(columns, table_name, batch_size=1000, fetch_size=fetch_size):
+                batch = [dict(zip(columns, row)) for row in chunk]
+                session.execute_write(extract_function, batch)
+                processed_rows += len(batch)
+                print_progress_bar(processed_rows, total_rows, prefix=f'Processing {table_name}', length=50)
         session.execute_write(createSuspectedRelatedRelationships)
     neo4j_driver.close()
 
@@ -216,6 +222,16 @@ def extractFromBiddingBaseinfo(tx, rows):
     """, rows=rows)
 
 
+def create_indexes(session):
+    indexes = [
+        "CREATE INDEX IF NOT EXISTS FOR (c:Company) ON (c.key_no)",
+        "CREATE INDEX IF NOT EXISTS FOR (c:Company) ON (c.company_id)",
+        "CREATE INDEX IF NOT EXISTS FOR (p:Person) ON (p.key_no)"
+    ]
+    for index in indexes:
+        session.run(index)
+    print("Indexes created.")
+
 
 def createSuspectedRelatedRelationships(tx):
     tx.run("""
@@ -235,31 +251,31 @@ def createSuspectedRelatedRelationships(tx):
 # 定义字典
 tables = {
     "t_company_control_person": {
-        "query": "SELECT id, key_no, company_id, company_name, oper_key_no, oper_name, node_type, stock_percent FROM t_company_control_person",
+        "columns": ["key_no", "company_id", "company_name", "oper_key_no", "oper_name", "node_type", "stock_percent"],
         "extract_function": extractFromCompanyControlPerson
     },
     "t_eci_company": {
-        "query": "SELECT key_no, company_id, company_name, oper_key_no, oper_name, province_code, province, address, phone_number FROM t_eci_company",
+        "columns": ["key_no", "company_id", "company_name", "oper_key_no", "oper_name", "province_code", "province", "address", "phone_number"],
         "extract_function": extractFromEciCompany
     },
     "zs_t_eci_employee": {
-        "query": "SELECT id, key_no, company_id, company_name, name, job, p_key_no FROM zs_t_eci_employee",
+        "columns": ["key_no", "company_id", "company_name", "name", "job", "p_key_no"],
         "extract_function": extractFromEciEmployee
     },
     "t_eci_partner": {
-        "query": "SELECT id, key_no, company_id, company_name, stock_name, stock_type, stock_percent, should_capi, p_key_no FROM t_eci_partner",
+        "columns": ["key_no", "company_id", "company_name", "stock_name", "stock_type", "stock_percent", "should_capi", "p_key_no"],
         "extract_function": extractFromEciPartner
     },
     "t_eci_branch": {
-        "query": "SELECT id, key_no, company_id, company_name, sub_key_no, sub_company_id, name FROM t_eci_branch",
+        "columns": ["key_no", "company_id", "company_name", "sub_key_no", "sub_company_id", "name"],
         "extract_function": extractFromEciBranch
     },
     "t_company_bidding_attr_info": {
-        "query": "SELECT pageTime, winBidPrice, winTenderer, wintendererCompanyId, tenderee, tendereeCompanyId FROM t_company_bidding_attr_info",
+        "columns": ["pageTime", "winBidPrice", "winTenderer", "wintendererCompanyId", "tenderee", "tendereeCompanyId"],
         "extract_function": extractFromBiddingBaseinfo
     },
 }
 
-process_data_for_neo4j(tables)
+process_data_for_neo4j(tables, fetch_size=0)
 
 print("Nodes and relationships have been created successfully.")
