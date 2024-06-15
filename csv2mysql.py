@@ -38,7 +38,7 @@ for filename in os.listdir(folder_path):
 
         try:
             # 读取 CSV 文件并逐个 chunk 导入数据库
-            chunk_size = 10000  # 分块大小
+            chunk_size = 1000  # 分块大小
             table_name = os.path.splitext(filename)[0]
 
             # 创建 SQLAlchemy 引擎
