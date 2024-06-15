@@ -1,7 +1,11 @@
 .idea
 __pycache__
+plugins
+data
+doc
 
 config.py
 *.xlsx
 *.docx
 *.doc
+*.zip
