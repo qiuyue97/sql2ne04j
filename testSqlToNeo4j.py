@@ -120,19 +120,13 @@ def extractFromEciCompany(tx, rows):
         UNWIND $rows AS row
         FOREACH (ignoreMe IN CASE WHEN row.key_no IS NOT NULL THEN [1] ELSE [] END |
             MERGE (c:Company {company_id: row.company_id})
-            ON CREATE SET c.company_id = row.company_id, c.key_no = row.key_no, c.name = row.company_name, c.address = row.address, c.phone_number = row.phone_number, c.create_from = 't_eci_company'
-            ON MATCH SET c.key_no = COALESCE(c.key_no, row.key_no), c.name = COALESCE(c.name, row.company_name), c.address = COALESCE(c.address, row.address), c.phone_number = COALESCE(c.phone_number, row.phone_number)
+            ON CREATE SET c.company_id = row.company_id, c.key_no = row.key_no, c.name = row.company_name, c.address = row.address, c.phone_number = row.phone_number, c.province = row.province, c.create_from = 't_eci_company'
+            ON MATCH SET c.key_no = COALESCE(c.key_no, row.key_no), c.name = COALESCE(c.name, row.company_name), c.address = COALESCE(c.address, row.address), c.phone_number = COALESCE(c.phone_number, row.phone_number), c.province = COALESCE(c.province, row.province)
             FOREACH (ignoreMe2 IN CASE WHEN row.oper_key_no IS NOT NULL AND row.oper_name <> "无" THEN [1] ELSE [] END |
                 MERGE (p:Person {key_no: row.oper_key_no})
                 ON CREATE SET p.key_no = row.oper_key_no, p.name = row.oper_name
                 ON MATCH SET p.name = COALESCE(p.name, row.oper_name)
                 MERGE (c)-[:legal_rep]->(p)
-            )
-            FOREACH (ignoreMe3 IN CASE WHEN row.province_code IS NOT NULL THEN [1] ELSE [] END |
-                MERGE (pr:Province {code: row.province_code})
-                ON CREATE SET pr.code = row.province_code, pr.name = row.province
-                ON MATCH SET pr.name = COALESCE(pr.name, row.province)
-                MERGE (c)-[:located_at]->(pr)
             )
         )
     """, rows=rows)
@@ -256,7 +250,7 @@ tables = {
         "extract_function": extractFromCompanyControlPerson
     },
     "t_eci_company": {
-        "columns": ["key_no", "company_id", "company_name", "oper_key_no", "oper_name", "province_code", "province", "address", "phone_number"],
+        "columns": ["key_no", "company_id", "company_name", "oper_key_no", "oper_name", "province", "address", "phone_number"],
         "extract_function": extractFromEciCompany
     },
     "zs_t_eci_employee": {
